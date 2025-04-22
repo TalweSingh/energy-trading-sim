@@ -90,10 +90,10 @@ class SimulationMetrics:
             
             # Calculate statistics
             results[strategy_id] = {
-                'mean_seconds': matched_orders['time_to_fill'].mean(),
-                'median_seconds': matched_orders['time_to_fill'].median(),
-                'min_seconds': matched_orders['time_to_fill'].min(),
-                'max_seconds': matched_orders['time_to_fill'].max(),
+                'mean_minutes': matched_orders['time_to_fill'].mean() / 60,
+                'median_minutes': matched_orders['time_to_fill'].median() / 60,
+                'min_minutes': matched_orders['time_to_fill'].min() / 60,
+                'max_minutes': matched_orders['time_to_fill'].max() / 60,
                 'count': len(matched_orders)
             }
         
@@ -206,6 +206,89 @@ class SimulationMetrics:
         
         return results
     
+    def buy_cost(self) -> Dict[str, Dict[str, Any]]:
+        """Calculate total buy cost (price × quantity) by strategy.
+        
+        Returns:
+            Dictionary with total buy cost by strategy
+        """
+        results = {}
+        
+        for strategy_id, strategy_orders in self.order_by_strategy.items():
+            # Get filled buy orders
+            filled_buys = strategy_orders[
+                (strategy_orders['status'] == 'filled') & 
+                (strategy_orders['event_type'] == 'filled') &
+                (strategy_orders['side'] == 'buy')
+            ]
+            
+            if filled_buys.empty:
+                results[strategy_id] = {'status': 'No filled buy orders'}
+                continue
+            
+            # Calculate total buy cost
+            total_cost = (filled_buys['price'] * filled_buys['quantity']).sum()
+            total_volume = filled_buys['quantity'].sum()
+            
+            results[strategy_id] = {
+                'total_buy_cost': total_cost,
+                'total_buy_volume': total_volume,
+                'avg_price': total_cost / total_volume if total_volume > 0 else 0
+            }
+        
+        return results
+    
+    def volume_execution_rate(self) -> Dict[str, Dict[str, Any]]:
+        """Compare intended trading volume vs. actual executed volume.
+        
+        Returns:
+            Dictionary with volume execution statistics by strategy
+        """
+        results = {}
+        
+        for strategy_id, strategy_orders in self.order_by_strategy.items():
+            # Get submitted orders
+            submitted_orders = strategy_orders[strategy_orders['event_type'] == 'submitted']
+            
+            # Get filled orders 
+            filled_orders = strategy_orders[
+                (strategy_orders['status'] == 'filled') & 
+                (strategy_orders['event_type'] == 'filled')
+            ]
+            
+            if submitted_orders.empty:
+                results[strategy_id] = {'status': 'No submitted orders'}
+                continue
+            
+            # Calculate intended and executed volumes
+            intended_volume = submitted_orders['quantity'].sum()
+            executed_volume = filled_orders['quantity'].sum()
+            execution_rate = executed_volume / intended_volume if intended_volume > 0 else 0
+            
+            results[strategy_id] = {
+                'intended_volume': intended_volume,
+                'executed_volume': executed_volume,
+                'execution_rate': execution_rate
+            }
+            
+            # Split by side
+            for side in ['buy', 'sell']:
+                side_submitted = submitted_orders[submitted_orders['side'] == side]
+                side_filled = filled_orders[filled_orders['side'] == side]
+                
+                if not side_submitted.empty:
+                    side_intended = side_submitted['quantity'].sum()
+                    side_executed = side_filled['quantity'].sum() if not side_filled.empty else 0
+                    side_rate = side_executed / side_intended if side_intended > 0 else 0
+                    
+                    results[strategy_id][side] = {
+                        'intended_volume': side_intended,
+                        'executed_volume': side_executed,
+                        'execution_rate': side_rate
+                    }
+        
+        return results
+    
     def run_all(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Run all available metrics.
         
@@ -217,5 +300,7 @@ class SimulationMetrics:
             "time_to_fill": self.time_to_fill(),
             "contract_volume": self.contract_volume(),
             "order_status_counts": self.order_status_counts(),
-            "execution_prices": self.execution_prices()
+            "execution_prices": self.execution_prices(),
+            "buy_cost": self.buy_cost(),
+            "volume_execution_rate": self.volume_execution_rate()
         }

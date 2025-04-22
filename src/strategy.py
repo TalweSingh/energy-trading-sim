@@ -3,7 +3,7 @@ import uuid
 from typing import List, Dict, Tuple, Any, Optional
 from abc import ABC, abstractmethod
 from .sim import Order
-
+import pandas as pd
 class Strategy(ABC):
     """Abstract base class for trading strategies.
     
@@ -11,7 +11,7 @@ class Strategy(ABC):
     the required methods.
     """
     
-    def __init__(self, strategy_id: Optional[str] = None):
+    def __init__(self, strategy_id: Optional[str] = None, load_profile: Optional[pd.DataFrame] = None):
         """Initialize the strategy.
         
         Args:
@@ -19,7 +19,8 @@ class Strategy(ABC):
                          If not provided, a UUID will be generated.
         """
         self.id = strategy_id or str(uuid.uuid4())
-        self.active_orders = {}  # Dictionary of active orders (order_id -> Order)
+        self.active_orders = {}
+        self.load_profile = load_profile
     
     def initialize(self, start_time: datetime.datetime, end_time: datetime.datetime) -> None:
         """Initialize the strategy with simulation timeframe.

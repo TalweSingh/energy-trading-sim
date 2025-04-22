@@ -9,17 +9,19 @@ import datetime
 class SimulationVisualizer:
     """Creates interactive visualizations for trading simulation results using Plotly."""
     
-    def __init__(self, metrics: Dict[str, Any], order_history: pd.DataFrame):
+    def __init__(self, metrics: Dict[str, Any], order_history: pd.DataFrame, max_time_to_fill=600):
         """Initialize with metrics and order history.
         
         Args:
             metrics: Dictionary of metrics from sim.analyze()
             order_history: DataFrame with order events
+            max_time_to_fill: Maximum time to fill in minutes
         """
         self.metrics = metrics
         self.order_history = order_history
+        self.max_time_to_fill = max_time_to_fill
         
-        # First, deep analysis of the raw data
+        # First analysis of the raw data
         print(f"Order history shape: {order_history.shape}")
         if not order_history.empty:
             # Count unique orders vs. events
@@ -61,15 +63,14 @@ class SimulationVisualizer:
             # Create a mapping of order_id to fill time
             fill_times = {}
             for _, row in filled_events.iterrows():
-                fill_times[row['order_id']] = row['submission_time']
+                fill_times[row['order_id']] = row['execution_time']
             
             # Apply fill times
             for idx, row in self.orders.iterrows():
                 if row['order_id'] in fill_times:
                     fill_time = fill_times[row['order_id']]
-                    self.orders.at[idx, 'time_to_fill'] = (fill_time - row['submission_time']).total_seconds()
+                    self.orders.at[idx, 'time_to_fill'] = (fill_time - row['submission_time']).total_seconds() / 60
             
-            # Debug counts by strategy
             print("\nFill counts by strategy:")
             for strategy in self.orders['strategy_id'].unique():
                 strat_orders = self.orders[self.orders['strategy_id'] == strategy]
@@ -77,11 +78,12 @@ class SimulationVisualizer:
                 total = len(strat_orders)
                 print(f"  {strategy}: {filled}/{total} ({filled/total:.1%} filled)")
     
-    def plot_buy_orders(self, strategy_id=None):
+    def plot_buy_orders(self, strategy_id=None, title=None):
         """Plot buy orders showing filled vs unfilled with time properties.
         
         Args:
             strategy_id: Optional strategy ID to filter by
+            title: Optional custom title for the plot
             
         Returns:
             Plotly figure
@@ -90,7 +92,7 @@ class SimulationVisualizer:
             return go.Figure().update_layout(
                 title="No order data available",
                 xaxis_title="Contract Time",
-                yaxis_title="Price"
+                yaxis_title="Price in €"
             )
         
         # Filter orders if strategy_id provided
@@ -104,10 +106,9 @@ class SimulationVisualizer:
             return go.Figure().update_layout(
                 title="No buy orders available",
                 xaxis_title="Contract Time",
-                yaxis_title="Price"
+                yaxis_title="Price in €"
             )
         
-        # Create figure
         fig = go.Figure()
         
         # Filled buy orders
@@ -121,16 +122,15 @@ class SimulationVisualizer:
                     size=filled_buys['quantity'] * 2,  # Scale by quantity
                     color=filled_buys['time_to_fill'],
                     colorscale='Viridis',
-                    colorbar=dict(title="Seconds to Fill"),
+                    colorbar=dict(title="Time to Fill (min)"),
                     symbol='triangle-up'
                 ),
                 name='Filled Buy Orders',
                 hovertemplate=(
                     '<b>Buy Order</b><br>' +
                     'Price: %{y:.2f}<br>' +
-                    'Contract Time: %{x}<br>' +
+                    'Delivery Time: %{x}<br>' +
                     'Filled: Yes<br>' +
-                    'Strategy: %{customdata[0]}<br>' +
                     'Submission: %{customdata[1]}<br>' +
                     'Time to Fill: %{customdata[2]:.0f} sec<br>' +
                     'Quantity: %{customdata[3]}'
@@ -151,20 +151,19 @@ class SimulationVisualizer:
                 y=unfilled_buys['price'],
                 mode='markers',
                 marker=dict(
-                    size=unfilled_buys['quantity'] * 2,  # Scale by quantity
-                    color='rgba(0, 0, 255, 0.5)',
-                    symbol='triangle-up',
-                    line=dict(width=1, color='black')
+                    size = 12,
+                    opacity=1.0,
+                    color='black',
+                    symbol='triangle-down',
                 ),
                 name='Unfilled Buy Orders',
                 hovertemplate=(
                     '<b>Buy Order</b><br>' +
                     'Price: %{y:.2f}<br>' +
-                    'Contract Time: %{x}<br>' +
+                    'Delivery Time: %{x}<br>' +
                     'Filled: No<br>' +
-                    'Strategy: %{customdata[0]}<br>' +
-                    'Submission: %{customdata[1]}<br>' +
-                    'Quantity: %{customdata[2]}'
+                    'Volume: %{customdata[2]}<br>' +
+                    'Submission: %{customdata[1]}'
                 ),
                 customdata=np.column_stack((
                     unfilled_buys['strategy_id'],
@@ -173,26 +172,63 @@ class SimulationVisualizer:
                 ))
             ))
         
-        # Update layout
-        title = "Buy Order Placement"
-        if strategy_id:
-            title += f" - Strategy: {strategy_id}"
-            
+        if title:
+            plot_title = title
+        else:
+            plot_title = "Buy Order Placement"
+            if strategy_id:
+                plot_title += f" - Strategy: {strategy_id}"
+        
         fig.update_layout(
-            title=title,
+            title=plot_title,
             xaxis_title="Contract Time",
-            yaxis_title="Price",
+            yaxis_title="Price in €/MWh",
             legend_title="Order Status",
-            hovermode="closest"
+            hovermode="closest",
+            legend=dict(
+                x=1.15,
+                y=0.5,
+                xanchor="left",
+                yanchor="middle",
+                bordercolor="black",
+                borderwidth=1,
+                bgcolor="white"
+            )
         )
+        
+        hovertemplate = (
+            "Price: %{y:.2f}<br>" +
+            "Delivery Time: %{x}<br>" +
+            "Status: %{customdata[0]}<br>" +
+            "Time to Fill: %{marker.color} minutes<br>" +
+            "<extra></extra>"
+        )
+        
+        fig.update_traces(
+            marker=dict(size=12),
+            opacity=1.0,
+            hovertemplate=hovertemplate
+        )
+        
+        # Update colorscale to start at 0 with configurable max (default 600)
+        fig.update_traces(
+            marker=dict(
+                colorscale="Viridis",
+                cmin=0,
+                cmax=self.max_time_to_fill if hasattr(self, 'max_time_to_fill') else 600,
+            )
+        )
+        
+        fig.update_xaxes(title_text="Delivery Time")
         
         return fig
     
-    def plot_sell_orders(self, strategy_id=None):
+    def plot_sell_orders(self, strategy_id=None, title=None):
         """Plot sell orders showing filled vs unfilled with time properties.
         
         Args:
             strategy_id: Optional strategy ID to filter by
+            title: Optional custom title for the plot
             
         Returns:
             Plotly figure
@@ -218,7 +254,6 @@ class SimulationVisualizer:
                 yaxis_title="Price"
             )
         
-        # Create figure
         fig = go.Figure()
         
         # Filled sell orders
@@ -232,8 +267,8 @@ class SimulationVisualizer:
                     size=filled_sells['quantity'] * 2,  # Scale by quantity
                     color=filled_sells['time_to_fill'],
                     colorscale='Viridis',
-                    colorbar=dict(title="Seconds to Fill"),
-                    symbol='triangle-down'
+                    colorbar=dict(title="Minutes until order was filled"),
+                    symbol='triangle-up'
                 ),
                 name='Filled Sell Orders',
                 hovertemplate=(
@@ -284,18 +319,54 @@ class SimulationVisualizer:
                 ))
             ))
         
-        # Update layout
-        title = "Sell Order Placement"
-        if strategy_id:
-            title += f" - Strategy: {strategy_id}"
-            
+        if title:
+            plot_title = title
+        else:
+            plot_title = "Sell Order Placement"
+            if strategy_id:
+                plot_title += f" - Strategy: {strategy_id}"
+        
         fig.update_layout(
-            title=title,
+            title=plot_title,
             xaxis_title="Contract Time",
             yaxis_title="Price",
             legend_title="Order Status",
-            hovermode="closest"
+            hovermode="closest",
+            legend=dict(
+                x=1.1,
+                y=0.5,
+                xanchor="left",
+                yanchor="middle",
+                bordercolor="black",
+                borderwidth=1,
+                bgcolor="white"
+            )
         )
+        
+        hovertemplate = (
+            "Price: %{y:.2f}<br>" +
+            "Delivery Time: %{x}<br>" +
+            "Status: %{customdata[0]}<br>" +
+            "Time to Fill: %{marker.color} minutes<br>" +
+            "<extra></extra>"
+        )
+        
+        fig.update_traces(
+            marker=dict(size=12),
+            opacity=1.0,
+            hovertemplate=hovertemplate
+        )
+        
+        # Update colorscale to start at 0 with configurable max (default 600)
+        fig.update_traces(
+            marker=dict(
+                colorscale="Viridis",
+                cmin=0,
+                cmax=self.max_time_to_fill if hasattr(self, 'max_time_to_fill') else 600,
+            )
+        )
+        
+        fig.update_xaxes(title_text="Delivery Time")
         
         return fig
     
@@ -308,17 +379,22 @@ class SimulationVisualizer:
         if not self.metrics:
             return go.Figure().update_layout(title="No metrics data available")
         
-        # Collect data for all strategies
+        # Define all columns
+        all_columns = ['Strategy', 'Fill Rate', 'VWAP', 'Buy VWAP', 'Sell VWAP', 
+                      'Time to Fill (min)', 'Volume', 'Buy Cost', 'Intended Volume', 'Execution Rate']
+        
         table_data = []
         
         # Get strategies from fill_rate metrics
         if 'fill_rate' in self.metrics:
             for strategy_id, data in self.metrics['fill_rate'].items():
-                row = {'Strategy': strategy_id}
+                # Initialize row with all columns set to empty strings
+                row = {col: '' for col in all_columns}
+                row['Strategy'] = strategy_id
                 
                 # Add fill rate
                 if 'fill_rate' in data:
-                    row['Fill Rate'] = f"{data['fill_rate']:.1%}"
+                    row['Fill Rate'] = f"{data['fill_rate']:.2%}"
                 
                 # Add execution prices (VWAP)
                 if 'execution_prices' in self.metrics and strategy_id in self.metrics['execution_prices']:
@@ -336,50 +412,62 @@ class SimulationVisualizer:
                 # Add time to fill
                 if 'time_to_fill' in self.metrics and strategy_id in self.metrics['time_to_fill']:
                     ttf_data = self.metrics['time_to_fill'][strategy_id]
-                    if 'mean_seconds' in ttf_data:
-                        row['Avg Time to Fill (s)'] = f"{ttf_data['mean_seconds']:.1f}"
+                    if 'mean_minutes' in ttf_data:
+                        row['Time to Fill (min)'] = f"{ttf_data['mean_minutes']:.2f}"
                 
                 # Add volume
                 if 'contract_volume' in self.metrics and strategy_id in self.metrics['contract_volume']:
                     vol_data = self.metrics['contract_volume'][strategy_id]
                     if 'total_volume' in vol_data:
-                        row['Volume'] = f"{vol_data['total_volume']}"
+                        row['Volume'] = f"{vol_data['total_volume']:.2f}"
+                
+                # Add buy cost
+                if 'buy_cost' in self.metrics and strategy_id in self.metrics['buy_cost']:
+                    cost_data = self.metrics['buy_cost'][strategy_id]
+                    if 'total_buy_cost' in cost_data:
+                        row['Buy Cost'] = f"{cost_data['total_buy_cost']:.2f}"
+                
+                # Add volume execution rate data
+                if 'volume_execution_rate' in self.metrics and strategy_id in self.metrics['volume_execution_rate']:
+                    vol_exec_data = self.metrics['volume_execution_rate'][strategy_id]
+                    if 'intended_volume' in vol_exec_data:
+                        row['Intended Volume'] = f"{vol_exec_data['intended_volume']:.2f}"
+                    if 'execution_rate' in vol_exec_data:
+                        row['Execution Rate'] = f"{vol_exec_data['execution_rate']:.2%}"
                 
                 table_data.append(row)
         
-        # Create table
         if not table_data:
             return go.Figure().update_layout(title="No metrics data available")
         
-        # Create headerColor based on number of columns
-        cols = list(table_data[0].keys())
-        headerColor = ['rgb(235, 245, 255)'] * len(cols)
+        headerColor = ['rgb(235, 245, 255)'] * len(all_columns)
         
         fig = go.Figure(data=[go.Table(
             header=dict(
-                values=cols,
+                values=all_columns,
                 fill_color=headerColor,
                 align='left',
-                font=dict(size=12)
+                font=dict(size=11)
             ),
             cells=dict(
                 values=[
-                    [row.get(col, '') for row in table_data]
-                    for col in cols
+                    [row[col] for row in table_data]
+                    for col in all_columns
                 ],
-                align='left'
+                align='left',
+                font=dict(size=10)
             )
         )])
         
         fig.update_layout(
             title="Strategy Performance Metrics",
-            height=130 + 30 * len(table_data)  # Adjust height based on rows
+            height=130 + 30 * len(table_data)
         )
         
         return fig
     
     def create_dashboard(self):
-        """Create a dashboard with strategy metrics and order placement by strategy.
+        """Create a dashboard with strategy metrics.
         
         Returns:
             Plotly figure
@@ -389,68 +477,25 @@ class SimulationVisualizer:
                 title="No order data available for dashboard"
             )
         
-        # Get strategies from data
-        strategies = self.orders['strategy_id'].unique()
-        
-        # Create figure with appropriate number of subplots
-        rows = 1 + len(strategies) * 2  # Metrics table + (buy + sell) for each strategy
-        
-        # Create proper 2D specs (each item in the list is a row)
-        specs = [[{"type": "table"}]]  # First row is the table
-        
-        # Add specs for each strategy (buy and sell plots)
-        for _ in strategies:
-            specs.append([{"type": "scatter"}])  # Buy plot
-            specs.append([{"type": "scatter"}])  # Sell plot
-        
-        # Create subplot titles
+        specs = [[{"type": "table"}]]
         subplot_titles = ["Strategy Metrics"]
-        for strategy in strategies:
-            subplot_titles.extend([
-                f"Buy Orders - {strategy}",
-                f"Sell Orders - {strategy}"
-            ])
         
-        # Create subplots
         fig = make_subplots(
-            rows=rows, 
+            rows=1, 
             cols=1,
             specs=specs,
             subplot_titles=subplot_titles,
             vertical_spacing=0.05
         )
         
-        # Add table to first row
+        # Add table to the subplot
         metrics_fig = self.create_metrics_table()
         fig.add_trace(metrics_fig.data[0], row=1, col=1)
         
-        # Add buy/sell plots for each strategy
-        for i, strategy in enumerate(strategies):
-            # Buy orders
-            buy_fig = self.plot_buy_orders(strategy)
-            for trace in buy_fig.data:
-                fig.add_trace(trace, row=2 + i*2, col=1)
-            
-            # Sell orders
-            sell_fig = self.plot_sell_orders(strategy)
-            for trace in sell_fig.data:
-                fig.add_trace(trace, row=3 + i*2, col=1)
-        
-        # Update layout
         fig.update_layout(
             title_text="Trading Simulation Results by Strategy",
-            height=400 + 500 * len(strategies),  # Base height + height per strategy
-            showlegend=True
+            height=400,
+            showlegend=False
         )
-        
-        # Update y-axis titles for all plots
-        for i in range(len(strategies)):
-            fig.update_yaxes(title_text="Price", row=2 + i*2, col=1)
-            fig.update_yaxes(title_text="Price", row=3 + i*2, col=1)
-        
-        # Update x-axis titles for all plots
-        for i in range(len(strategies)):
-            fig.update_xaxes(title_text="Contract Time", row=2 + i*2, col=1)
-            fig.update_xaxes(title_text="Contract Time", row=3 + i*2, col=1)
         
         return fig

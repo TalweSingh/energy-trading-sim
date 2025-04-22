@@ -5,6 +5,7 @@ import logging
 import uuid
 import copy
 from .metrics import SimulationMetrics
+
 class Order:
     """Represents an intraday trading order for a specific delivery window.
     
@@ -153,7 +154,6 @@ class TradingSimulation:
         """Expire contracts that have reached delivery time."""
         expired_contracts = []
         for order_id, order in list(self.active_orders.items()):
-            # TODO: add variable in config that determines how far ahead a contracts expired
             if order.contract_time < self.current_time:
                 # Create history snapshot before changing status
                 history_order = copy.deepcopy(order)
@@ -178,11 +178,15 @@ class TradingSimulation:
             history_order.status = "filled"
             history_order.event_type = "filled"
             history_order.execution_time = self.current_time
+            
+            history_order.execution_price = order.price  # Or use a price from the clearing mechanism
+            
             self.order_history.append(history_order)
             
             # Update active order and remove
             order.status = "filled"
             order.execution_time = self.current_time
+            order.execution_price = order.price  # Same as above
             self.active_orders.pop(order.order_id, None)
 
     def _process_new_orders(self, new_orders: List[Order], strategy: Any):
@@ -206,8 +210,12 @@ class TradingSimulation:
             if updated_order.order_id in self.active_orders:
                 # Create a copy of the original order before updating
                 original = self.active_orders[updated_order.order_id]
-                history_order = copy.deepcopy(original)
-                history_order.status = "updated"
+                
+                # Preserve original submission time
+                updated_order.submission_time = original.submission_time
+                
+                history_order = copy.deepcopy(updated_order)  # Use updated_order with preserved submission time
+                history_order.status = "active"  # Order is still active, just updated
                 history_order.event_type = "updated"
                 history_order.execution_time = self.current_time
                 self.order_history.append(history_order)
